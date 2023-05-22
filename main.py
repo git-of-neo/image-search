@@ -22,5 +22,6 @@ params['pre_logits'] = {}
 resolution = 224
 img = Image.open('car.jpg')
 
-logits, = mixer.apply(dict(params=params), (np.array(img) / 128 - 1)[None, ...], train=False)
-print(len(logits), logits)
+def vectorize(image : Image):
+    logits, = mixer.apply(dict(params=params), (np.array(img) / 128 - 1)[None, ...], train=False)
+    return logits
