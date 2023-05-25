@@ -8,7 +8,29 @@ from fastapi import FastAPI, UploadFile
 from io import BytesIO
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
-from uuid import uuid4, UUID
+from uuid import uuid4
+from pydantic import BaseModel
+from jax.nn import softmax
+
+## configs
+IMAGE_STORE_DIR = "stored"
+DB_PATH = "qdrant.db"
+
+## reset flag
+# ew, but it'll work for now
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1] == "--reset":
+    import shutil
+
+    try:
+        shutil.rmtree(DB_PATH)
+    except FileNotFoundError:
+        pass
+    try:
+        shutil.rmtree(IMAGE_STORE_DIR)
+    except FileNotFoundError:
+        pass
 
 ## Model
 config = ml_collections.ConfigDict()
@@ -38,11 +60,12 @@ def vectorize(image: Image.Image):
     (logits,) = mixer.apply(
         dict(params=params), (np.array(image) / 128 - 1)[None, ...], train=False
     )
+    logits = softmax(logits)
     return logits.tolist()
 
 
 ## db setup
-client = QdrantClient(path="qdrant.db")
+client = QdrantClient(path=DB_PATH)
 try:
     client.get_collection("images")
     db_ready = True
@@ -54,28 +77,30 @@ except ValueError:
     db_ready = False
 
 
-def _insert_image(img: Image.Image, image_id: UUID):
-    client.upsert(
-        "images", points=[PointStruct(id=str(image_id), vector=vectorize(img))]
-    )
-
-
-def _save_static_image(img: Image.Image, idx: UUID):
-    img.save("stored/" + str(idx) + ".jpeg", format="jpeg")
+def _insert_image(img: Image.Image):
+    idx = uuid4()
+    img.save(IMAGE_STORE_DIR + "/" + str(idx) + ".jpeg", format="jpeg")
+    client.upsert("images", points=[PointStruct(id=str(idx), vector=vectorize(img))])
 
 
 ## server setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import os
+
+    try:
+        os.mkdir(IMAGE_STORE_DIR)
+    except FileExistsError:
+        pass
+
     if not db_ready:
-        import os
 
         def is_jpg(s: str):
             return s[-4:] == ".jpg"
 
         static_dir = "static/"
         for fname in filter(is_jpg, os.listdir(static_dir)):
-            _insert_image(Image.open(static_dir + fname), uuid4())
+            _insert_image(Image.open(static_dir + fname))
 
     yield
 
@@ -87,20 +112,26 @@ app = FastAPI(lifespan=lifespan)
 @app.post("/images")
 async def insert_image(uploaded_file: UploadFile):
     image = Image.open(BytesIO(await uploaded_file.read()))
-    idx = uuid4()
-    _save_static_image(image, idx)
-    _insert_image(image, idx)
+    _insert_image(image)
     return {"message": "ok"}
 
 
+class ImageMatch(BaseModel):
+    url: str
+    similarity_score: float
+
+
 @app.post("/images/search")
-async def find_similar_images(uploaded_file: UploadFile):
+async def find_similar_images(uploaded_file: UploadFile) -> list[ImageMatch]:
     image = Image.open(BytesIO(await uploaded_file.read()))
     res = client.search(
-        collection_name="images", query_vector=vectorize(image), limit=5
+        collection_name="images",
+        query_vector=vectorize(image),
+        limit=5,
+        score_threshold=0.1,
     )
     # TODO :  CDN for match images
-    return {"urls": [r.id for r in res]}
+    return [ImageMatch(url=r.id, similarity_score=r.score) for r in res]
 
 
 if __name__ == "__main__":
