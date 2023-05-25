@@ -1,0 +1,5 @@
+*.npz
+**/__pycache__
+venv
+static/
+*.db

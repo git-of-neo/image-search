@@ -7,3 +7,6 @@ Pillow>=9.5.0
 git+https://github.com/google/flaxformer
 
 jax[cpu]
+fastapi
+uvicorn[standard]
+python-multipart
