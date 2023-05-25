@@ -1,16 +1,26 @@
+import asyncio
 from contextlib import asynccontextmanager
 import vit_jax.models_mixer as model
 import ml_collections
 import numpy as np
 from PIL import Image
 from vit_jax.checkpoint import load
-from fastapi import FastAPI, UploadFile
+from fastapi import FastAPI, Request, UploadFile
 from io import BytesIO
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 from uuid import uuid4
 from pydantic import BaseModel
 from jax.nn import softmax
+import os
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from fastapi import Depends, Query
+from fastapi.staticfiles import StaticFiles
+import base64
+import aiofiles
+from fastapi.responses import RedirectResponse
+
 
 ## configs
 IMAGE_STORE_DIR = "stored"
@@ -86,8 +96,6 @@ def _insert_image(img: Image.Image):
 ## server setup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    import os
-
     try:
         os.mkdir(IMAGE_STORE_DIR)
     except FileExistsError:
@@ -107,6 +115,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+templates = Jinja2Templates(directory="templates")
+
 
 ## endpoints
 @app.post("/images")
@@ -116,13 +126,30 @@ async def insert_image(uploaded_file: UploadFile):
     return {"message": "ok"}
 
 
-class ImageMatch(BaseModel):
-    url: str
-    similarity_score: float
+def parse_list(matches: str = Query(None)) -> list:
+    if not matches:
+        return []
+    return matches.split(",")
+
+
+async def encode_image(fname: str):
+    async with aiofiles.open(f"stored/{fname}", "rb") as f:
+        encoded = base64.b64encode(await f.read()).decode()
+    return encoded
+
+
+@app.get("/images", response_class=HTMLResponse)
+async def results_page(request: Request, matches: list[str] = Depends(parse_list)):
+    fnames = [m + ".jpeg" for m in matches]
+    encodings = await asyncio.gather(*(encode_image(f) for f in fnames))
+    return templates.TemplateResponse(
+        "results.html",
+        dict(request=request, imges=encodings),
+    )
 
 
 @app.post("/images/search")
-async def find_similar_images(uploaded_file: UploadFile) -> list[ImageMatch]:
+async def find_similar_images(uploaded_file: UploadFile):
     image = Image.open(BytesIO(await uploaded_file.read()))
     res = client.search(
         collection_name="images",
@@ -130,8 +157,12 @@ async def find_similar_images(uploaded_file: UploadFile) -> list[ImageMatch]:
         limit=5,
         score_threshold=0.1,
     )
-    # TODO :  CDN for match images
-    return [ImageMatch(url=r.id, similarity_score=r.score) for r in res]
+
+    redirect_to = "/images"
+    if res:
+        redirect_to = redirect_to + "?matches=" + ",".join([str(r.id) for r in res])
+
+    return RedirectResponse(url=redirect_to, status_code=303)
 
 
 if __name__ == "__main__":
