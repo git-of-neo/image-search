@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Match results</title>
+</head>
+
+<body>
+    {% for img in imges %}
+    <img src="data:image/jpeg;base64, {{img}}" />
+    {% endfor %}
+</body>
+
+</html>
