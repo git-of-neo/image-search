@@ -24,5 +24,8 @@ Currently, the most convenient way is to send a POST request to the search endpo
 ![image](search.png)
 *HTML response rendered in Postman*
 
+## Miscellaneous
+Used [Lorem Picsum](https://github.com/DMarby/picsum-photos) to obtain images during testing
+
 ## TODOs
 In general, the whole project lacks polish and completeness, but works as a quick experiment into getting MlpMixer and Qdrant to work together. 
